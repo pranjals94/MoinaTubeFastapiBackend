@@ -1,0 +1,6 @@
+/.vscode
+/backend/.venv
+/backend/_pycache
+/frontend/my-react-app/node_modules
+/frontend/my-react-app/build
+/shared
