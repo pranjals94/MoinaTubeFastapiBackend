@@ -46,7 +46,7 @@ router = APIRouter(
 VIDEO_DIR = "../shared"
 os.makedirs(VIDEO_DIR, exist_ok=True)
 
-hostname: str = "http://192.168.18.217:8001/apis/" # ubuntu server wifi ip
+hostname: str = "http://192.168.13.217:8001/apis/" # ubuntu server wifi ip
 # hostname: str = "http://192.168.1.217:8001/apis/"  #ubuntu server ethernet ip
 
 class Item(BaseModel):
@@ -98,6 +98,9 @@ def process_directory(video_dir, thumbnail_dir):
                 print(f"[Thumbnail Deletion Error] File: {thumb_file} - {e}")
 
 
+def remove_surrogates(s):
+    return ''.join(c for c in s if not (0xD800 <= ord(c) <= 0xDFFF))
+
 @router.get("/listItems/{path:path}", response_model=List[Item])
 def list_files(path: str):
     base_path = Path("../shared").resolve()  # Optional: restrict to a base folder
@@ -130,13 +133,14 @@ def list_files(path: str):
     return [
     Item(
         name=entry.name,
-        thumbnailUrl=hostname + "getThumbnail/" + str(Path(path)) + "/thumbnails/" + urllib.parse.quote(os.path.splitext(entry.name)[0] + ".jpg"),
+        thumbnailUrl=hostname + "getThumbnail/" + str(Path(path)) + "/thumbnails/" +
+            urllib.parse.quote(os.path.splitext(remove_surrogates(entry.name))[0] + ".jpg"),
         is_dir=entry.is_dir()
     )
     for entry in sorted(
         target_path.iterdir(),
         key=lambda e: e.stat().st_mtime,
-        reverse=True  # Most recent first
+        reverse=True
     )
     if entry.name != "thumbnails"
 ]
@@ -183,10 +187,7 @@ def get_thumbnail(path: str):
 
 @router.get("/stream/{filename:path}")
 def stream_video(filename: str, request: Request):
-    # print("pathRaw:", filename)
     file_path = os.path.join(VIDEO_DIR, filename)
-    # print("path:", file_path)
-
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
 
@@ -194,7 +195,6 @@ def stream_video(filename: str, request: Request):
     range_header = request.headers.get("range")
 
     if range_header is None:
-        # If no range header, return full video
         def full_file():
             with open(file_path, "rb") as f:
                 yield from f
@@ -207,61 +207,24 @@ def stream_video(filename: str, request: Request):
             }
         )
 
-    # Parse the range header
+    # Partial content
     bytes_range = range_header.replace("bytes=", "").split("-")
     start = int(bytes_range[0])
     end = int(bytes_range[1]) if bytes_range[1] else file_size - 1
     length = end - start + 1
 
+    CHUNK_SIZE = 1024 * 1024  # 1MB chunks
+   
     def range_file():
         with open(file_path, "rb") as f:
             f.seek(start)
-            yield f.read(length)
-
-    return StreamingResponse(
-        range_file(),
-        status_code=HTTP_206_PARTIAL_CONTENT,
-        media_type="video/mp4",
-        headers={
-            "Content-Range": f"bytes {start}-{end}/{file_size}",
-            "Accept-Ranges": "bytes",
-            "Content-Length": str(length),
-        }
-    )
-    # print("pathRaw:", filename)
-    file_path = os.path.join(VIDEO_DIR, filename)
-    # print("path:", file_path)
-
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File not found")
-
-    file_size = os.path.getsize(file_path)
-    range_header = request.headers.get("range")
-
-    if range_header is None:
-        # If no range header, return full video
-        def full_file():
-            with open(file_path, "rb") as f:
-                yield from f
-        return StreamingResponse(
-            full_file(),
-            media_type="video/mp4",
-            headers={
-                "Accept-Ranges": "bytes",
-                "Content-Length": str(file_size),
-            }
-        )
-
-    # Parse the range header
-    bytes_range = range_header.replace("bytes=", "").split("-")
-    start = int(bytes_range[0])
-    end = int(bytes_range[1]) if bytes_range[1] else file_size - 1
-    length = end - start + 1
-
-    def range_file():
-        with open(file_path, "rb") as f:
-            f.seek(start)
-            yield f.read(length)
+            remaining = length
+            while remaining > 0:
+                chunk = f.read(min(CHUNK_SIZE, remaining))
+                if not chunk:
+                    break
+                yield chunk
+                remaining -= len(chunk)
 
     return StreamingResponse(
         range_file(),

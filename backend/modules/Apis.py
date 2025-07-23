@@ -183,10 +183,7 @@ def get_thumbnail(path: str):
 
 @router.get("/stream/{filename:path}")
 def stream_video(filename: str, request: Request):
-    # print("pathRaw:", filename)
     file_path = os.path.join(VIDEO_DIR, filename)
-    # print("path:", file_path)
-
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
 
@@ -194,7 +191,6 @@ def stream_video(filename: str, request: Request):
     range_header = request.headers.get("range")
 
     if range_header is None:
-        # If no range header, return full video
         def full_file():
             with open(file_path, "rb") as f:
                 yield from f
@@ -207,61 +203,24 @@ def stream_video(filename: str, request: Request):
             }
         )
 
-    # Parse the range header
+    # Partial content
     bytes_range = range_header.replace("bytes=", "").split("-")
     start = int(bytes_range[0])
     end = int(bytes_range[1]) if bytes_range[1] else file_size - 1
     length = end - start + 1
 
+    CHUNK_SIZE = 1024 * 1024  # 1MB chunks
+   
     def range_file():
         with open(file_path, "rb") as f:
             f.seek(start)
-            yield f.read(length)
-
-    return StreamingResponse(
-        range_file(),
-        status_code=HTTP_206_PARTIAL_CONTENT,
-        media_type="video/mp4",
-        headers={
-            "Content-Range": f"bytes {start}-{end}/{file_size}",
-            "Accept-Ranges": "bytes",
-            "Content-Length": str(length),
-        }
-    )
-    # print("pathRaw:", filename)
-    file_path = os.path.join(VIDEO_DIR, filename)
-    # print("path:", file_path)
-
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File not found")
-
-    file_size = os.path.getsize(file_path)
-    range_header = request.headers.get("range")
-
-    if range_header is None:
-        # If no range header, return full video
-        def full_file():
-            with open(file_path, "rb") as f:
-                yield from f
-        return StreamingResponse(
-            full_file(),
-            media_type="video/mp4",
-            headers={
-                "Accept-Ranges": "bytes",
-                "Content-Length": str(file_size),
-            }
-        )
-
-    # Parse the range header
-    bytes_range = range_header.replace("bytes=", "").split("-")
-    start = int(bytes_range[0])
-    end = int(bytes_range[1]) if bytes_range[1] else file_size - 1
-    length = end - start + 1
-
-    def range_file():
-        with open(file_path, "rb") as f:
-            f.seek(start)
-            yield f.read(length)
+            remaining = length
+            while remaining > 0:
+                chunk = f.read(min(CHUNK_SIZE, remaining))
+                if not chunk:
+                    break
+                yield chunk
+                remaining -= len(chunk)
 
     return StreamingResponse(
         range_file(),
